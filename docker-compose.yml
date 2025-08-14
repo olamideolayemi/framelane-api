@@ -2,9 +2,9 @@ services:
   db:
     image: postgres:17
     environment:
-      POSTGRES_USER: framelane
-      POSTGRES_PASSWORD: Olibobo20
-      POSTGRES_DB: framelane
+      POSTGRES_USER: ${POSTGRES_USER:-framelane}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-framelane}
     ports:
       - "5432:5432"
     volumes:
