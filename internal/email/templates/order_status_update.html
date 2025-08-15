@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    body { font-family: Arial, sans-serif; background-color: #f4f4f4; }
+    .container { background: #fff; padding: 20px; border-radius: 8px; }
+    h1 { color: #333; }
+    .status {
+      font-size: 1.2em;
+      color: #28a745;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Order Status Update</h1>
+    <p>Hi {{.CustomerName}},</p>
+    <p>Your order <strong>{{.OrderID}}</strong> status has been updated to:</p>
+    <p class="status">{{.NewStatus}}</p>
+    <a href="{{.OrderLink}}">View Order Details</a>
+  </div>
+</body>
+</html>

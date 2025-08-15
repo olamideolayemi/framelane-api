@@ -7,12 +7,12 @@ import (
 )
 
 type Claims struct {
-	UserID  uint `json:"uid"`
+	UserID  string `json:"uid"`
 	IsAdmin bool `json:"adm"`
 	jwt.RegisteredClaims
 }
 
-func MakeToken(secret string, uid uint, admin bool, hours int) (string, error) {
+func MakeToken(secret string, uid string, admin bool, hours int) (string, error) {
 	claims := &Claims{
 		UserID:  uid,
 		IsAdmin: admin,

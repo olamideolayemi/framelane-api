@@ -57,11 +57,11 @@ func Load() *Config {
 		S3Bucket:    os.Getenv("S3_BUCKET"),
 		S3Region:    os.Getenv("S3_REGION"),
 
+		FromEmail: os.Getenv("SMTP_FROM_EMAIL"),
 		SMTPHost:  os.Getenv("SMTP_HOST"),
 		SMTPPort:  toInt("SMTP_PORT", 587),
 		SMTPUser:  os.Getenv("SMTP_USER"),
 		SMTPPass:  os.Getenv("SMTP_PASS"),
-		FromEmail: os.Getenv("FROM_EMAIL"),
 	}
 	if cfg.DatabaseURL == "" || cfg.JWTSecret == "" {
 		log.Fatal("Missing critical env vars")
