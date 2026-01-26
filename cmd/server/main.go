@@ -34,6 +34,9 @@ func main() {
 	if err := seed.SeedFrameSizes(d); err != nil {
 		log.Fatal("failed to seed frame sizes:", err)
 	}
+	if err := seed.EnsureAdminUser(d); err != nil {
+		log.Fatal("failed to ensure admin user:", err)
+	}
 
 	s3, err := storage.New(cfg.S3Endpoint, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3UseSSL, cfg.S3Bucket)
 	if err != nil {
