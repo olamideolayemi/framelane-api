@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Verify your email</title>
+  </head>
+  <body style="margin:0; padding:0; font-family: Arial, sans-serif; background:#f6f6f6;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f6f6; padding:24px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="background:#ffffff; border-radius:12px; overflow:hidden;">
+            <tr>
+              <td style="background:#0f766e; color:#ffffff; padding:24px;">
+                <h1 style="margin:0; font-size:22px;">Verify your Frame Lane account</h1>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:24px; color:#1f2937;">
+                <p style="margin:0 0 16px;">Hi {{.Name}},</p>
+                <p style="margin:0 0 16px;">
+                  Thanks for signing up. Please verify your email address to activate your account.
+                </p>
+                <p style="margin:0 0 24px;">
+                  This link will expire in 24 hours.
+                </p>
+                <p style="margin:0 0 24px;">
+                  <a href="{{.VerifyURL}}" style="display:inline-block; padding:12px 20px; background:#0f766e; color:#ffffff; text-decoration:none; border-radius:8px;">
+                    Verify Email
+                  </a>
+                </p>
+                <p style="margin:0 0 8px; font-size:13px; color:#6b7280;">
+                  If the button doesn't work, copy and paste this link into your browser:
+                </p>
+                <p style="margin:0; font-size:12px; color:#6b7280; word-break:break-all;">
+                  {{.VerifyURL}}
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:16px 24px; background:#f9fafb; color:#6b7280; font-size:12px;">
+                If you did not create this account, you can ignore this email.
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

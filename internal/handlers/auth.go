@@ -1,16 +1,23 @@
 package handlers
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/mail"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
 	"github.com/gin-gonic/gin"
 	"github.com/olamideolayemi/framelane-api/internal/auth"
+	"github.com/olamideolayemi/framelane-api/internal/email"
 	"github.com/olamideolayemi/framelane-api/internal/models"
 )
 
@@ -18,6 +25,7 @@ type AuthHandler struct {
 	DB        *gorm.DB
 	JWTSecret string
 	JWTHours  int
+	Email     *email.Sender
 }
 
 func (h *AuthHandler) Register(c *gin.Context) {
@@ -57,12 +65,22 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
+	verifyToken, verifyHash, err := generateVerificationToken()
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "failed to create verification token", err.Error())
+		return
+	}
+	now := time.Now()
+
 	u := models.User{
-		Name:     in.Name,
-		Email:    in.Email,
-		Phone:    in.Phone,
-		Address:  in.Address,
-		Password: string(hash),
+		Name:                in.Name,
+		Email:               in.Email,
+		Phone:               in.Phone,
+		Address:             in.Address,
+		Password:            string(hash),
+		EmailVerified:       false,
+		EmailVerifyTokenHash: verifyHash,
+		EmailVerifySentAt:   &now,
 	}
 
 	if err := h.DB.Create(&u).Error; err != nil {
@@ -71,6 +89,32 @@ func (h *AuthHandler) Register(c *gin.Context) {
 			return
 		}
 		respondError(c, http.StatusInternalServerError, "failed to create user", err.Error())
+		return
+	}
+
+	if h.Email == nil {
+		_ = h.DB.Delete(&u).Error
+		respondError(c, http.StatusServiceUnavailable, "email service unavailable", nil)
+		return
+	}
+
+	verifyURL := fmt.Sprintf("%s/v1/auth/verify?token=%s", requestBaseURL(c), verifyToken)
+	name := u.Name
+	if strings.TrimSpace(name) == "" {
+		name = "there"
+	}
+	html, err := email.ParseTemplate("verify_email.html", map[string]any{
+		"Name":      name,
+		"VerifyURL": verifyURL,
+	})
+	if err != nil {
+		_ = h.DB.Delete(&u).Error
+		respondError(c, http.StatusInternalServerError, "failed to build verification email", err.Error())
+		return
+	}
+	if err := h.Email.Send(u.Email, "Verify your email", html); err != nil {
+		_ = h.DB.Delete(&u).Error
+		respondError(c, http.StatusInternalServerError, "failed to send verification email", err.Error())
 		return
 	}
 
@@ -89,6 +133,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 			"address": u.Address,
 			"isAdmin": u.IsAdmin,
 		},
+		"verificationRequired": true,
 	}, nil)
 }
 
@@ -125,6 +170,15 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		respondError(c, http.StatusForbidden, "account is suspended", nil)
 		return
 	}
+	if !u.EmailVerified {
+		if u.EmailVerifySentAt != nil && time.Now().After(u.EmailVerifySentAt.Add(24*time.Hour)) {
+			_ = h.DB.Delete(&u).Error
+			respondError(c, http.StatusUnauthorized, "verification expired; account deleted", nil)
+			return
+		}
+		respondError(c, http.StatusForbidden, "email not verified", nil)
+		return
+	}
 	if bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(in.Password)) != nil {
 		respondError(c, http.StatusUnauthorized, "invalid email or password", nil)
 		return
@@ -146,6 +200,85 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			"isAdmin": u.IsAdmin,
 		},
 	}, nil)
+}
+
+func (h *AuthHandler) VerifyEmail(c *gin.Context) {
+	token := strings.TrimSpace(c.Query("token"))
+	if token == "" {
+		respondError(c, http.StatusBadRequest, "verification token is required", nil)
+		return
+	}
+	hash := hashVerificationToken(token)
+
+	var user models.User
+	if err := h.DB.Where("email_verify_token_hash = ?", hash).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondError(c, http.StatusNotFound, "invalid or expired verification token", nil)
+			return
+		}
+		respondError(c, http.StatusInternalServerError, "failed to fetch user", err.Error())
+		return
+	}
+
+	if user.EmailVerified {
+		respondSuccess(c, http.StatusOK, gin.H{"message": "email already verified"}, nil)
+		return
+	}
+
+	if user.EmailVerifySentAt == nil {
+		respondError(c, http.StatusBadRequest, "verification token is invalid", nil)
+		return
+	}
+
+	if time.Now().After(user.EmailVerifySentAt.Add(24 * time.Hour)) {
+		_ = h.DB.Delete(&user).Error
+		respondError(c, http.StatusUnauthorized, "verification expired; account deleted", nil)
+		return
+	}
+
+	now := time.Now()
+	if err := h.DB.Model(&user).Updates(map[string]interface{}{
+		"email_verified":        true,
+		"email_verified_at":     &now,
+		"email_verify_token_hash": "",
+		"email_verify_sent_at":  nil,
+	}).Error; err != nil {
+		respondError(c, http.StatusInternalServerError, "failed to verify email", err.Error())
+		return
+	}
+
+	respondSuccess(c, http.StatusOK, gin.H{"message": "email verified"}, nil)
+}
+
+func generateVerificationToken() (string, string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", "", err
+	}
+	token := base64.RawURLEncoding.EncodeToString(b)
+	hash := hashVerificationToken(token)
+	return token, hash, nil
+}
+
+func hashVerificationToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+func requestBaseURL(c *gin.Context) string {
+	proto := strings.TrimSpace(c.GetHeader("X-Forwarded-Proto"))
+	if proto == "" {
+		if c.Request.TLS != nil {
+			proto = "https"
+		} else {
+			proto = "http"
+		}
+	}
+	host := strings.TrimSpace(c.GetHeader("X-Forwarded-Host"))
+	if host == "" {
+		host = c.Request.Host
+	}
+	return fmt.Sprintf("%s://%s", proto, host)
 }
 
 // CreateIntent handles payment intent creation (stub implementation)

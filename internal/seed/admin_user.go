@@ -37,19 +37,21 @@ func EnsureAdminUser(db *gorm.DB) error {
 		}
 
 		user = models.User{
-			Email:    email,
-			Password: string(hash),
-			Name:     name,
-			Phone:    phone,
-			Address:  address,
-			IsAdmin:  true,
-			IsActive: true,
+			Email:          email,
+			Password:       string(hash),
+			Name:           name,
+			Phone:          phone,
+			Address:        address,
+			IsAdmin:        true,
+			IsActive:       true,
+			EmailVerified:  true,
 		}
 		return db.Create(&user).Error
 	}
 
 	updates := map[string]interface{}{
-		"is_admin": true,
+		"is_admin":       true,
+		"email_verified": true,
 	}
 	if name != "" {
 		updates["name"] = name

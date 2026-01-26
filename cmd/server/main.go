@@ -37,6 +37,7 @@ func main() {
 	if err := seed.EnsureAdminUser(d); err != nil {
 		log.Fatal("failed to ensure admin user:", err)
 	}
+	seed.StartUnverifiedUserCleanup(d, time.Hour)
 
 	s3, err := storage.New(cfg.S3Endpoint, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3UseSSL, cfg.S3Bucket)
 	if err != nil {

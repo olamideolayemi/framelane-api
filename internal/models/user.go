@@ -16,6 +16,10 @@ type User struct {
     Address   string    `gorm:"size:400"`
 	IsAdmin   bool      `gorm:"default:false"`
 	IsActive  bool      `gorm:"default:true"`
+	EmailVerified       bool       `gorm:"default:false"`
+	EmailVerifiedAt     *time.Time
+	EmailVerifyTokenHash string    `gorm:"size:128;index"`
+	EmailVerifySentAt   *time.Time
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

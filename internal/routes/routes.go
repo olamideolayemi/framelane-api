@@ -22,9 +22,10 @@ func Setup(r *gin.Engine, d Deps) {
 	r.GET("/v1/health", handlers.Health)
 	fh := &handlers.FrameHandler{DB: d.DB}
 
-	ah := &handlers.AuthHandler{DB: d.DB, JWTSecret: d.JWTSecret, JWTHours: d.JWTHours}
+	ah := &handlers.AuthHandler{DB: d.DB, JWTSecret: d.JWTSecret, JWTHours: d.JWTHours, Email: d.Email}
 	r.POST("/v1/auth/register", ah.Register)
 	r.POST("/v1/auth/login", ah.Login)
+	r.GET("/v1/auth/verify", ah.VerifyEmail)
 
 	uh := &handlers.UploadHandler{S3: d.S3}
 	r.GET("/v1/upload-url", auth.RequireAuth(d.JWTSecret), uh.GetPresignedURL)
@@ -42,7 +43,7 @@ func Setup(r *gin.Engine, d Deps) {
 
 	// user
 	user := r.Group("/v1")
-	user.Use(auth.RequireAuth(d.JWTSecret))
+	user.Use(auth.RequireAuth(d.JWTSecret), auth.RequireVerified(d.DB))
 	{
 		user.GET("/orders", oh.ListMine)
 		user.POST("/orders", oh.Create)
@@ -53,7 +54,7 @@ func Setup(r *gin.Engine, d Deps) {
 
 	// admin
 	admin := r.Group("/v1/admin")
-	admin.Use(auth.RequireAuth(d.JWTSecret), auth.RequireAdmin())
+	admin.Use(auth.RequireAuth(d.JWTSecret), auth.RequireVerified(d.DB), auth.RequireAdmin())
 	{
 		admin.GET("/orders", oh.ListAll)
 		admin.PATCH("/orders/:id/status", oh.UpdateStatus)
