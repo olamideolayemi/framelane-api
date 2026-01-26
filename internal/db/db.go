@@ -12,6 +12,9 @@ import (
 func Connect(dsn string) *gorm.DB {
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil { log.Fatal(err) }
+	if err := db.Exec(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`).Error; err != nil {
+		log.Fatal(err)
+	}
 	if err := db.AutoMigrate(&models.User{}, &models.Order{}, &models.Frame{}, &models.FrameSize{}); err != nil {
 		log.Fatal(err)
 	}

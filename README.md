@@ -309,3 +309,7 @@ The response includes `image_url` like `/uploads/frames/<filename>`.
 
 - Rate limit is enabled (10 requests per second, per IP).
 - CORS allows `http://framelane-framer-app-v1.2.vercel.app` and `http://localhost:3000`.
+
+## Deployment
+
+- Render Postgres setup: `RENDER_POSTGRES_SETUP.md`
