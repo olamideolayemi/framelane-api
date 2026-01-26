@@ -10,7 +10,7 @@ Base URL (local): `http://localhost:8080`
 2) Run the server:
 
 ```bash
-go run ./cmd/server
+go run .
 ```
 
 ## Configuration
