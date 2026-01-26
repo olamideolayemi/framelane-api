@@ -2,3 +2,5 @@
 /.env.example
 /.env.local
 .vscode
+
+.DS_Store

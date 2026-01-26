@@ -12,7 +12,7 @@ import (
 func Connect(dsn string) *gorm.DB {
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil { log.Fatal(err) }
-	if err := db.AutoMigrate(&models.User{}, &models.Order{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Order{}, &models.Frame{}, &models.FrameSize{}); err != nil {
 		log.Fatal(err)
 	}
 	return db

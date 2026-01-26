@@ -1,8 +1,10 @@
 package handlers
 
 import (
-	"fmt"
+	"errors"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -42,36 +44,40 @@ func (h *UsersHandler) ListUsers(c *gin.Context) {
 	// Parse query params with defaults
 	page := 1
 	limit := 10
-	if p := c.Query("page"); p != "" {
-		fmt.Sscanf(p, "%d", &page)
-		if page < 1 {
-			page = 1
+	if p := strings.TrimSpace(c.Query("page")); p != "" {
+		if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
+			page = parsed
 		}
 	}
-	if l := c.Query("limit"); l != "" {
-		fmt.Sscanf(l, "%d", &limit)
-		if limit < 1 {
-			limit = 10
+	if l := strings.TrimSpace(c.Query("limit")); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
 		}
+	}
+	if limit > 100 {
+		limit = 100
 	}
 
 	offset := (page - 1) * limit
 
 	// Fetch total count for pagination
 	var total int64
-	h.DB.Model(&models.User{}).Count(&total)
+	if err := h.DB.Model(&models.User{}).Count(&total).Error; err != nil {
+		respondError(c, http.StatusInternalServerError, "failed to count users", err.Error())
+		return
+	}
 
 	// Fetch paginated results
 	var users []models.User
 	if err := h.DB.Offset(offset).Limit(limit).Order("created_at DESC").Find(&users).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		respondError(c, http.StatusInternalServerError, "database error", err.Error())
 		return
 	}
 
 	// Build safe response with timestamps
-	var response []UserResponse
-	for _, u := range users {
-		response = append(response, UserResponse{
+	response := make([]UserResponse, len(users))
+	for i, u := range users {
+		response[i] = UserResponse{
 			ID:        u.ID,
 			Email:     u.Email,
 			Name:      u.Name,
@@ -81,14 +87,16 @@ func (h *UsersHandler) ListUsers(c *gin.Context) {
 			IsActive:  u.IsActive,
 			CreatedAt: u.CreatedAt,
 			UpdatedAt: u.UpdatedAt,
-		})
+		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"page":  page,
-		"limit": limit,
-		"total": total,
-		"users": response,
+	totalPages := int((total + int64(limit) - 1) / int64(limit))
+
+	respondSuccess(c, http.StatusOK, response, gin.H{
+		"page":        page,
+		"limit":       limit,
+		"total":       total,
+		"total_pages": totalPages,
 	})
 }
 
@@ -97,21 +105,31 @@ func (h *UsersHandler) GetUser(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		respondError(c, http.StatusBadRequest, "invalid user ID", nil)
 		return
 	}
 
 	var user models.User
 	if err := h.DB.First(&user, "id = ?", id).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondError(c, http.StatusNotFound, "user not found", nil)
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		respondError(c, http.StatusInternalServerError, "database error", err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, user)
+	respondSuccess(c, http.StatusOK, UserResponse{
+		ID:        user.ID,
+		Email:     user.Email,
+		Name:      user.Name,
+		Address:   user.Address,
+		Phone:     user.Phone,
+		IsAdmin:   user.IsAdmin,
+		IsActive:  user.IsActive,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+	}, nil)
 }
 
 // Suspend user
@@ -119,27 +137,27 @@ func (h *UsersHandler) SuspendUser(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		respondError(c, http.StatusBadRequest, "invalid user ID", nil)
 		return
 	}
 
 	var user models.User
 	if err := h.DB.First(&user, "id = ?", id).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondError(c, http.StatusNotFound, "user not found", nil)
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		respondError(c, http.StatusInternalServerError, "database error", err.Error())
 		return
 	}
 
 	user.IsActive = false
 	if err := h.DB.Save(&user).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to suspend user"})
+		respondError(c, http.StatusInternalServerError, "failed to suspend user", err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "User suspended successfully"})
+	respondSuccess(c, http.StatusOK, gin.H{"message": "user suspended successfully"}, nil)
 }
 
 // Delete user
@@ -147,47 +165,62 @@ func (h *UsersHandler) DeleteUser(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		respondError(c, http.StatusBadRequest, "invalid user ID", nil)
 		return
 	}
 
-	if err := h.DB.Delete(&models.User{}, "id = ?", id).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete user"})
+	result := h.DB.Delete(&models.User{}, "id = ?", id)
+	if result.Error != nil {
+		respondError(c, http.StatusInternalServerError, "failed to delete user", result.Error.Error())
 		return
 	}
 
-	c.Status(http.StatusNoContent)
+	if result.RowsAffected == 0 {
+		respondError(c, http.StatusNotFound, "user not found", nil)
+		return
+	}
+
+	respondSuccess(c, http.StatusOK, gin.H{"message": "user deleted successfully"}, nil)
 }
 
 func (h *UsersHandler) UpdateUserProfile(c *gin.Context) {
 	// Get authenticated user ID from context
 	userIDVal, exists := c.Get("uid")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		respondError(c, http.StatusUnauthorized, "authentication required", nil)
 		return
 	}
 
 	userID, ok := userIDVal.(string)
 	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid user ID type"})
+		respondError(c, http.StatusInternalServerError, "invalid user context", nil)
+		return
+	}
+	parsedUserID, err := uuid.Parse(userID)
+	if err != nil {
+		respondError(c, http.StatusUnauthorized, "invalid user ID", nil)
 		return
 	}
 
 	// Bind request body
 	var req UpdateProfileRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		respondError(c, http.StatusBadRequest, "invalid request body", err.Error())
 		return
 	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.Phone = strings.TrimSpace(req.Phone)
+	req.Address = strings.TrimSpace(req.Address)
+	req.Password = strings.TrimSpace(req.Password)
 
 	// Fetch user
 	var user models.User
-	if err := h.DB.First(&user, "id = ?", userID).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
-		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	if err := h.DB.First(&user, "id = ?", parsedUserID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondError(c, http.StatusNotFound, "user not found", nil)
+			return
 		}
+		respondError(c, http.StatusInternalServerError, "failed to fetch user", err.Error())
 		return
 	}
 
@@ -202,9 +235,13 @@ func (h *UsersHandler) UpdateUserProfile(c *gin.Context) {
 		user.Address = req.Address
 	}
 	if req.Password != "" {
+		if len(req.Password) < 8 {
+			respondError(c, http.StatusBadRequest, "password must be at least 8 characters", nil)
+			return
+		}
 		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to hash password"})
+			respondError(c, http.StatusInternalServerError, "failed to hash password", err.Error())
 			return
 		}
 		user.Password = string(hashedPassword)
@@ -212,23 +249,25 @@ func (h *UsersHandler) UpdateUserProfile(c *gin.Context) {
 
 	// Save changes
 	if err := h.DB.Save(&user).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update profile"})
+		respondError(c, http.StatusInternalServerError, "failed to update profile", err.Error())
 		return
 	}
 
 	// Build safe user response
 	response := UserResponse{
-		ID:       user.ID,
-		Email:    user.Email,
-		Name:     user.Name,
-		Address:  user.Address,
-		Phone:    user.Phone,
-		IsAdmin:  user.IsAdmin,
-		IsActive: user.IsActive,
+		ID:        user.ID,
+		Email:     user.Email,
+		Name:      user.Name,
+		Address:   user.Address,
+		Phone:     user.Phone,
+		IsAdmin:   user.IsAdmin,
+		IsActive:  user.IsActive,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	respondSuccess(c, http.StatusOK, gin.H{
 		"message": "profile updated successfully",
 		"user":    response,
-	})
+	}, nil)
 }

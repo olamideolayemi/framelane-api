@@ -32,7 +32,7 @@ func Setup(r *gin.Engine, d Deps) {
 	oh := &handlers.OrdersHandler{DB: d.DB, Email: d.Email}
 	r.GET("/v1/track/:orderId", oh.Track)
 
-	ph := &handlers.PaymentsHandler{DB: d.DB}
+	ph := &handlers.PaymentsHandler{DB: d.DB, Email: d.Email}
 	r.POST("/v1/payments/intent", ph.CreateIntent)
 	r.POST("/v1/payments/webhook", ph.Webhook)
 

@@ -26,8 +26,11 @@ type OrderResponse struct {
 	ID      uuid.UUID `json:"id"`
 	OrderID string    `json:"orderId"`
 	User    struct {
-		ID   uuid.UUID `json:"id"`
-		Name string    `json:"name"`
+		ID      uuid.UUID `json:"id"`
+		Name    string    `json:"name"`
+		Phone   string    `json:"phone"`
+		Email   string    `json:"email"`
+		Address string    `json:"address"`
 	} `json:"user"`
 	Frame struct {
 		ID   uuid.UUID `json:"id"`

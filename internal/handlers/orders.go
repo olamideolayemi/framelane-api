@@ -2,20 +2,19 @@ package handlers
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
-	"time"
-
-	// "net/http"
+	"strconv"
 	"strings"
-
-	"gorm.io/gorm"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/olamideolayemi/framelane-api/internal/email"
 	"github.com/olamideolayemi/framelane-api/internal/models"
+	"gorm.io/gorm"
 )
 
 type OrdersHandler struct {
@@ -23,29 +22,45 @@ type OrdersHandler struct {
 	Email *email.Sender
 }
 
-func randID() string {
+func randID() (string, error) {
 	b := make([]byte, 6)
-	_, _ = rand.Read(b)
-	return fmt.Sprintf("%x", b) // 12 hex chars
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", b), nil // 12 hex chars
 }
 
 // POST /v1/orders (guest or logged-in)
 func (h *OrdersHandler) Create(c *gin.Context) {
 	uidVal, exists := c.Get("uid")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "You must be logged in to place an order"})
+		respondError(c, http.StatusUnauthorized, "authentication required", nil)
 		return
 	}
 
-	uid, err := uuid.Parse(uidVal.(string))
+	uidStr, ok := uidVal.(string)
+	if !ok {
+		respondError(c, http.StatusInternalServerError, "invalid user context", nil)
+		return
+	}
+
+	uid, err := uuid.Parse(uidStr)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid user ID"})
+		respondError(c, http.StatusUnauthorized, "invalid user ID", nil)
 		return
 	}
 
 	var user models.User
 	if err := h.DB.First(&user, "id = ?", uid).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondError(c, http.StatusUnauthorized, "user not found", nil)
+			return
+		}
+		respondError(c, http.StatusInternalServerError, "failed to fetch user", err.Error())
+		return
+	}
+	if !user.IsActive {
+		respondError(c, http.StatusForbidden, "account is suspended", nil)
 		return
 	}
 
@@ -59,39 +74,74 @@ func (h *OrdersHandler) Create(c *gin.Context) {
 
 	// Bind JSON
 	if err := c.ShouldBindJSON(&in); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request data", "details": err.Error()})
+		respondError(c, http.StatusBadRequest, "invalid request data", err.Error())
+		return
+	}
+	in.Address = strings.TrimSpace(in.Address)
+	in.Notes = strings.TrimSpace(in.Notes)
+	in.ImageURL = strings.TrimSpace(in.ImageURL)
+	in.FrameID = strings.TrimSpace(in.FrameID)
+	in.SizeID = strings.TrimSpace(in.SizeID)
+	if in.Address == "" {
+		respondError(c, http.StatusBadRequest, "address is required", nil)
+		return
+	}
+	if in.ImageURL == "" {
+		respondError(c, http.StatusBadRequest, "image URL is required", nil)
 		return
 	}
 
 	// Parse Frame ID
 	frameID, err := uuid.Parse(in.FrameID)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid frame ID"})
+		respondError(c, http.StatusBadRequest, "invalid frame ID", nil)
 		return
 	}
 
 	var frame models.Frame
 	if err := h.DB.First(&frame, "id = ?", frameID).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Frame not found"})
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondError(c, http.StatusNotFound, "frame not found", nil)
+			return
+		}
+		respondError(c, http.StatusInternalServerError, "failed to fetch frame", err.Error())
+		return
+	}
+	if strings.ToLower(frame.Status) != "available" {
+		respondError(c, http.StatusConflict, "frame type is not available", nil)
 		return
 	}
 
 	// Parse FrameSize ID
 	sizeID, err := uuid.Parse(in.SizeID)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid frame size ID"})
+		respondError(c, http.StatusBadRequest, "invalid frame size ID", nil)
 		return
 	}
 
 	var size models.FrameSize
 	if err := h.DB.First(&size, "id = ?", sizeID).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Frame size not found"})
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondError(c, http.StatusNotFound, "frame size not found", nil)
+			return
+		}
+		respondError(c, http.StatusInternalServerError, "failed to fetch frame size", err.Error())
+		return
+	}
+	if strings.ToLower(size.Status) != "available" {
+		respondError(c, http.StatusConflict, "frame size is not available", nil)
 		return
 	}
 
 	// Create order
+	rid, err := randID()
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "failed to generate order ID", err.Error())
+		return
+	}
+
 	order := models.Order{
-		OrderID:  strings.ToUpper("FL-" + randID()),
+		OrderID:  strings.ToUpper("FL-" + rid),
 		UserID:   uid,
 		FrameID:  frame.ID,
 		Frame:    frame,
@@ -99,10 +149,11 @@ func (h *OrdersHandler) Create(c *gin.Context) {
 		Size:     size,
 		ImageURL: in.ImageURL,
 		Notes:    in.Notes,
+		Status:   OrderStatusPending,
 	}
 
 	if err := h.DB.Create(&order).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not create order", "details": err.Error()})
+		respondError(c, http.StatusInternalServerError, "could not create order", err.Error())
 		return
 	}
 
@@ -118,7 +169,7 @@ func (h *OrdersHandler) Create(c *gin.Context) {
 			"Address":      in.Address,
 			"Notes":        in.Notes,
 			"Total":        "₦0",
-			"Status":       "Pending",
+			"Status":       OrderStatusPending,
 			"Year":         fmt.Sprintf("%d", time.Now().Year()),
 		}
 		if err := SendOrderConfirmation(h.Email, user.Email, data); err != nil {
@@ -126,8 +177,8 @@ func (h *OrdersHandler) Create(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusCreated, gin.H{
-		"message":   "Order placed successfully",
+	respondSuccess(c, http.StatusCreated, gin.H{
+		"message":   "order placed successfully",
 		"orderId":   order.OrderID,
 		"id":        order.ID,
 		"frame":     frame.Name,
@@ -135,54 +186,49 @@ func (h *OrdersHandler) Create(c *gin.Context) {
 		"price":     size.Price,
 		"imageUrl":  order.ImageURL,
 		"notes":     order.Notes,
+		"status":    order.Status,
 		"createdAt": order.CreatedAt,
 		"updatedAt": order.UpdatedAt,
-	})
+	}, nil)
 }
 
 // GET /v1/orders (auth) -> list own
 func (h *OrdersHandler) ListMine(c *gin.Context) {
 	uidVal, exists := c.Get("uid")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "You must be logged in"})
+		respondError(c, http.StatusUnauthorized, "authentication required", nil)
 		return
 	}
 
-	uid, err := uuid.Parse(uidVal.(string))
+	uidStr, ok := uidVal.(string)
+	if !ok {
+		respondError(c, http.StatusInternalServerError, "invalid user context", nil)
+		return
+	}
+
+	uid, err := uuid.Parse(uidStr)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid user ID"})
+		respondError(c, http.StatusUnauthorized, "invalid user ID", nil)
 		return
 	}
 
-	page := 1
-	limit := 10
-
-	if p, ok := c.GetQuery("page"); ok {
-		fmt.Sscanf(p, "%d", &page)
-		if page < 1 {
-			page = 1
-		}
-	}
-
-	if l, ok := c.GetQuery("limit"); ok {
-		fmt.Sscanf(l, "%d", &limit)
-		if limit < 1 {
-			limit = 10
-		}
-	}
+	page, limit := parsePageLimit(c, 10)
 
 	offset := (page - 1) * limit
 
 	var total int64
-	h.DB.Model(&models.Order{}).
+	if err := h.DB.Model(&models.Order{}).
 		Where("user_id = ?", uid).
-		Count(&total)
+		Count(&total).Error; err != nil {
+		respondError(c, http.StatusInternalServerError, "failed to count orders", err.Error())
+		return
+	}
 
 	var orders []models.Order
 	if err := h.DB.
 		Where("user_id = ?", uid).
 		Preload("User", func(db *gorm.DB) *gorm.DB {
-			return db.Select("id", "name")
+			return db.Select("id", "name", "phone", "email", "address")
 		}).
 		Preload("Frame").
 		Preload("Size").
@@ -190,9 +236,11 @@ func (h *OrdersHandler) ListMine(c *gin.Context) {
 		Limit(limit).
 		Offset(offset).
 		Find(&orders).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, http.StatusInternalServerError, "failed to fetch orders", err.Error())
 		return
 	}
+
+	totalPages := int((total + int64(limit) - 1) / int64(limit))
 
 	// Map to safe response
 	responses := make([]models.OrderResponse, len(orders))
@@ -201,11 +249,17 @@ func (h *OrdersHandler) ListMine(c *gin.Context) {
 			ID:      o.ID,
 			OrderID: o.OrderID,
 			User: struct {
-				ID   uuid.UUID `json:"id"`
-				Name string    `json:"name"`
+				ID      uuid.UUID `json:"id"`
+				Name    string    `json:"name"`
+				Phone   string    `json:"phone"`
+				Email   string    `json:"email"`
+				Address string    `json:"address"`
 			}{
-				ID:   o.User.ID,
-				Name: o.User.Name,
+				ID:      o.User.ID,
+				Name:    o.User.Name,
+				Phone:   o.User.Phone,
+				Email:   o.User.Email,
+				Address: o.User.Address,
 			},
 			Frame: struct {
 				ID   uuid.UUID `json:"id"`
@@ -223,6 +277,7 @@ func (h *OrdersHandler) ListMine(c *gin.Context) {
 				Name:  o.Size.Name,
 				Price: o.Size.Price,
 			},
+			Price:     o.Size.Price,
 			ImageURL:  o.ImageURL,
 			Status:    o.Status,
 			Notes:     o.Notes,
@@ -232,44 +287,32 @@ func (h *OrdersHandler) ListMine(c *gin.Context) {
 
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"page":   page,
-		"limit":  limit,
-		"total":  total,
-		"orders": responses,
+	respondSuccess(c, http.StatusOK, responses, gin.H{
+		"page":        page,
+		"limit":       limit,
+		"total":       total,
+		"total_pages": totalPages,
 	})
 }
 
 // GET /v1/admin/orders (admin)
 func (h *OrdersHandler) ListAll(c *gin.Context) {
-	page := 1
-	limit := 10
-
-	if p, ok := c.GetQuery("page"); ok {
-		fmt.Sscanf(p, "%d", &page)
-		if page < 1 {
-			page = 1
-		}
-	}
-
-	if l, ok := c.GetQuery("limit"); ok {
-		fmt.Sscanf(l, "%d", &limit)
-		if limit < 1 {
-			limit = 10
-		}
-	}
+	page, limit := parsePageLimit(c, 10)
 
 	offset := (page - 1) * limit
 
 	// Count total records (for pagination)
 	var total int64
-	h.DB.Model(&models.Order{}).Count(&total)
+	if err := h.DB.Model(&models.Order{}).Count(&total).Error; err != nil {
+		respondError(c, http.StatusInternalServerError, "failed to count orders", err.Error())
+		return
+	}
 
 	// Fetch paginated records
 	var orders []models.Order
 	if err := h.DB.
 		Preload("User", func(db *gorm.DB) *gorm.DB {
-			return db.Select("id", "name")
+			return db.Select("id", "name", "phone", "email", "address")
 		}).
 		Preload("Frame").
 		Preload("Size").
@@ -277,9 +320,11 @@ func (h *OrdersHandler) ListAll(c *gin.Context) {
 		Limit(limit).
 		Offset(offset).
 		Find(&orders).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, http.StatusInternalServerError, "failed to fetch orders", err.Error())
 		return
 	}
+
+	totalPages := int((total + int64(limit) - 1) / int64(limit))
 
 	// Build response
 	responses := make([]models.OrderResponse, len(orders))
@@ -288,11 +333,17 @@ func (h *OrdersHandler) ListAll(c *gin.Context) {
 			ID:      o.ID,
 			OrderID: o.OrderID,
 			User: struct {
-				ID   uuid.UUID `json:"id"`
-				Name string    `json:"name"`
+				ID      uuid.UUID `json:"id"`
+				Name    string    `json:"name"`
+				Phone   string    `json:"phone"`
+				Email   string    `json:"email"`
+				Address string    `json:"address"`
 			}{
-				ID:   o.User.ID,
-				Name: o.User.Name,
+				ID:      o.User.ID,
+				Name:    o.User.Name,
+				Phone:   o.User.Phone,
+				Email:   o.User.Email,
+				Address: o.User.Address,
 			},
 			Frame: struct {
 				ID   uuid.UUID `json:"id"`
@@ -310,6 +361,7 @@ func (h *OrdersHandler) ListAll(c *gin.Context) {
 				Name:  o.Size.Name,
 				Price: o.Size.Price,
 			},
+			Price:     o.Size.Price,
 			ImageURL:  o.ImageURL,
 			Status:    o.Status,
 			Notes:     o.Notes,
@@ -318,27 +370,32 @@ func (h *OrdersHandler) ListAll(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"page":   page,
-		"limit":  limit,
-		"total":  total,
-		"orders": responses,
+	respondSuccess(c, http.StatusOK, responses, gin.H{
+		"page":        page,
+		"limit":       limit,
+		"total":       total,
+		"total_pages": totalPages,
 	})
 }
 
 // PATCH /v1/admin/orders/:id/status (admin)
 func (h *OrdersHandler) UpdateStatus(c *gin.Context) {
-	id := c.Param("id")
-	var in struct {
-		Status string `json:"status"`
-	}
-
-	if err := c.BindJSON(&in); err != nil {
-		c.JSON(400, gin.H{"error": "bad input"})
+	id := strings.TrimSpace(c.Param("id"))
+	if id == "" {
+		respondError(c, http.StatusBadRequest, "order ID is required", nil)
 		return
 	}
-	if in.Status == "" {
-		c.JSON(400, gin.H{"error": "status required"})
+	var in struct {
+		Status string `json:"status" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&in); err != nil {
+		respondError(c, http.StatusBadRequest, "invalid request body", err.Error())
+		return
+	}
+	normalizedStatus, ok := normalizeOrderStatus(in.Status)
+	if !ok {
+		respondError(c, http.StatusBadRequest, "invalid status", gin.H{"allowed": orderStatuses})
 		return
 	}
 
@@ -347,18 +404,31 @@ func (h *OrdersHandler) UpdateStatus(c *gin.Context) {
 	// Decide how to query based on the format of `id`
 	if strings.HasPrefix(id, "FL-") {
 		if err := h.DB.Where("order_id = ?", id).First(&order).Error; err != nil {
-			c.JSON(404, gin.H{"error": "order not found"})
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				respondError(c, http.StatusNotFound, "order not found", nil)
+				return
+			}
+			respondError(c, http.StatusInternalServerError, "failed to fetch order", err.Error())
 			return
 		}
 	} else {
-		if err := h.DB.Where("id = ?", id).First(&order).Error; err != nil {
-			c.JSON(404, gin.H{"error": "order not found"})
+		orderID, err := uuid.Parse(id)
+		if err != nil {
+			respondError(c, http.StatusBadRequest, "invalid order ID", nil)
+			return
+		}
+		if err := h.DB.Where("id = ?", orderID).First(&order).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				respondError(c, http.StatusNotFound, "order not found", nil)
+				return
+			}
+			respondError(c, http.StatusInternalServerError, "failed to fetch order", err.Error())
 			return
 		}
 	}
 
-	if err := h.DB.Model(&order).Update("status", in.Status).Error; err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+	if err := h.DB.Model(&order).Update("status", normalizedStatus).Error; err != nil {
+		respondError(c, http.StatusInternalServerError, "failed to update status", err.Error())
 		return
 	}
 
@@ -369,7 +439,7 @@ func (h *OrdersHandler) UpdateStatus(c *gin.Context) {
 			data := map[string]string{
 				"CustomerName": user.Name,
 				"OrderID":      order.OrderID,
-				"NewStatus":    in.Status,
+				"NewStatus":    normalizedStatus,
 				"OrderLink":    fmt.Sprintf("https://framelane.com/track/%s", order.OrderID),
 				"Year":         fmt.Sprintf("%d", time.Now().Year()),
 			}
@@ -378,47 +448,144 @@ func (h *OrdersHandler) UpdateStatus(c *gin.Context) {
 		}
 	}
 
-	c.JSON(200, gin.H{"ok": true, "status": in.Status})
+	respondSuccess(c, http.StatusOK, gin.H{"status": normalizedStatus}, nil)
 }
 
 // DELETE /v1/admin/orders/:id (admin)
 func (h *OrdersHandler) DeleteOrder(c *gin.Context) {
-	id := c.Param("id")
+	id := strings.TrimSpace(c.Param("id"))
+	if id == "" {
+		respondError(c, http.StatusBadRequest, "order ID is required", nil)
+		return
+	}
 
 	var order models.Order
 	// Check if order exists
 	if strings.HasPrefix(id, "FL-") {
 		if err := h.DB.Where("order_id = ?", id).First(&order).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				respondError(c, http.StatusNotFound, "order not found", nil)
+				return
+			}
+			respondError(c, http.StatusInternalServerError, "failed to fetch order", err.Error())
 			return
 		}
 	} else {
-		if err := h.DB.Where("id = ?", id).First(&order).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
+		orderID, err := uuid.Parse(id)
+		if err != nil {
+			respondError(c, http.StatusBadRequest, "invalid order ID", nil)
+			return
+		}
+		if err := h.DB.Where("id = ?", orderID).First(&order).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				respondError(c, http.StatusNotFound, "order not found", nil)
+				return
+			}
+			respondError(c, http.StatusInternalServerError, "failed to fetch order", err.Error())
 			return
 		}
 	}
 
 	// Delete the order
 	if err := h.DB.Delete(&order).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete order"})
+		respondError(c, http.StatusInternalServerError, "failed to delete order", err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"message": fmt.Sprintf("Order %s deleted successfully", order.OrderID),
-	})
+	respondSuccess(c, http.StatusOK, gin.H{
+		"message": fmt.Sprintf("order %s deleted successfully", order.OrderID),
+	}, nil)
 }
 
 // GET /v1/track/:orderId  (public)
 func (h *OrdersHandler) Track(c *gin.Context) {
-	oid := c.Param("orderId")
-	var o models.Order
-	if err := h.DB.Where("order_id = ?", oid).First(&o).Error; err != nil {
-		c.JSON(404, gin.H{"error": "not found"})
+	oid := strings.TrimSpace(c.Param("orderId"))
+	if oid == "" {
+		respondError(c, http.StatusBadRequest, "order ID is required", nil)
 		return
 	}
-	c.JSON(200, gin.H{"orderId": o.OrderID, "status": o.Status, "frame": o.Frame, "size": o.Size})
+
+	var order models.Order
+	if err := h.DB.
+		Preload("User", func(db *gorm.DB) *gorm.DB {
+			return db.Select("id", "name", "phone", "email", "address")
+		}).
+		Preload("Frame").
+		Preload("Size").
+		Where("order_id = ?", oid).
+		First(&order).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondError(c, http.StatusNotFound, "order not found", nil)
+			return
+		}
+		respondError(c, http.StatusInternalServerError, "failed to fetch order", err.Error())
+		return
+	}
+
+	// Map into the same structure as ListAll/ListMine
+	response := models.OrderResponse{
+		ID:      order.ID,
+		OrderID: order.OrderID,
+		User: struct {
+			ID      uuid.UUID `json:"id"`
+			Name    string    `json:"name"`
+			Phone   string    `json:"phone"`
+			Email   string    `json:"email"`
+			Address string    `json:"address"`
+		}{
+			ID:      order.User.ID,
+			Name:    order.User.Name,
+			Phone:   order.User.Phone,
+			Email:   order.User.Email,
+			Address: order.User.Address,
+		},
+		Frame: struct {
+			ID   uuid.UUID `json:"id"`
+			Name string    `json:"name"`
+		}{
+			ID:   order.Frame.ID,
+			Name: order.Frame.Name,
+		},
+		Size: struct {
+			ID    uuid.UUID `json:"id"`
+			Name  string    `json:"name"`
+			Price int       `json:"price"`
+		}{
+			ID:    order.Size.ID,
+			Name:  order.Size.Name,
+			Price: order.Size.Price,
+		},
+		Price:     order.Size.Price,
+		ImageURL:  order.ImageURL,
+		Status:    order.Status,
+		Notes:     order.Notes,
+		CreatedAt: order.CreatedAt,
+		UpdatedAt: order.UpdatedAt,
+	}
+
+	respondSuccess(c, http.StatusOK, response, nil)
+}
+
+func parsePageLimit(c *gin.Context, defaultLimit int) (int, int) {
+	if defaultLimit < 1 {
+		defaultLimit = 10
+	}
+	page := 1
+	limit := defaultLimit
+	if v := strings.TrimSpace(c.Query("page")); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			page = parsed
+		}
+	}
+	if v := strings.TrimSpace(c.Query("limit")); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	return page, limit
 }
 
 func SendOrderConfirmation(sender *email.Sender, customerEmail string, data map[string]string) error {
