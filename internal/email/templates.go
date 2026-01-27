@@ -5,14 +5,13 @@ import (
 	"embed"
 	"fmt"
 	"html/template"
-	"path/filepath"
 )
 
+//go:embed templates/*.html
 var templatesFS embed.FS
 
 func ParseTemplate(templateName string, data interface{}) (string, error) {
-	tmplPath := filepath.Join("internal", "email", "templates", templateName)
-	tmpl, err := template.ParseFiles(tmplPath)
+	tmpl, err := template.ParseFS(templatesFS, "templates/"+templateName)
 	if err != nil {
 		return "", fmt.Errorf("parse template %s: %w", templateName, err)
 	}
