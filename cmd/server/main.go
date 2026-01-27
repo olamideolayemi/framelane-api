@@ -49,7 +49,7 @@ func main() {
 	// Create one router instance
 	r := gin.New()
 	r.Use(gin.Recovery(), cors.New(cors.Config{
-		AllowOrigins:     []string{"http://framelane-framer-app-v1.2.vercel.app", "http://localhost:3000", "https://framelane-framer-app-v1.2.vercel.app", "https://framer-app-1-2-xwm3.vercel.app"},
+		AllowOrigins:     []string{"http://framelane-framer-app-v1.2.vercel.app", "http://localhost:3000", "https://framelane-framer-app-v1.2.vercel.app", "https://framelane-frame-app-v2.vercel.app"},
 		AllowMethods:     []string{"GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Authorization", "Content-Type"},
 		ExposeHeaders:    []string{"Content-Length"},
