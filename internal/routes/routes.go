@@ -16,16 +16,25 @@ type Deps struct {
 	JWTHours  int
 	S3        *storage.S3
 	Email     *email.Sender
+	FrontendBaseURL string
 }
 
 func Setup(r *gin.Engine, d Deps) {
 	r.GET("/v1/health", handlers.Health)
 	fh := &handlers.FrameHandler{DB: d.DB}
 
-	ah := &handlers.AuthHandler{DB: d.DB, JWTSecret: d.JWTSecret, JWTHours: d.JWTHours, Email: d.Email}
+	ah := &handlers.AuthHandler{
+		DB:             d.DB,
+		JWTSecret:      d.JWTSecret,
+		JWTHours:       d.JWTHours,
+		Email:          d.Email,
+		FrontendBaseURL: d.FrontendBaseURL,
+	}
 	r.POST("/v1/auth/register", ah.Register)
 	r.POST("/v1/auth/login", ah.Login)
 	r.GET("/v1/auth/verify", ah.VerifyEmail)
+	r.POST("/v1/auth/forgot-password", ah.ForgotPassword)
+	r.POST("/v1/auth/reset-password", ah.ResetPassword)
 
 	uh := &handlers.UploadHandler{S3: d.S3}
 	r.GET("/v1/upload-url", auth.RequireAuth(d.JWTSecret), uh.GetPresignedURL)

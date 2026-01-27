@@ -64,7 +64,7 @@ func main() {
 	// Register routes
 	routes.Setup(r, routes.Deps{
 		DB: d, JWTSecret: cfg.JWTSecret, JWTHours: cfg.JWTExpiresH,
-		S3: s3, Email: mailer,
+		S3: s3, Email: mailer, FrontendBaseURL: cfg.FrontendBaseURL,
 	})
 
 	hub := ws.NewHub()

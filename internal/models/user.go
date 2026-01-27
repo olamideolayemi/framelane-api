@@ -20,6 +20,9 @@ type User struct {
 	EmailVerifiedAt     *time.Time
 	EmailVerifyTokenHash string    `gorm:"size:128;index"`
 	EmailVerifySentAt   *time.Time
+	PasswordResetTokenHash string   `gorm:"size:128;index"`
+	PasswordResetSentAt    *time.Time
+	PasswordResetExpiresAt *time.Time
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

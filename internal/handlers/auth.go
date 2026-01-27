@@ -26,6 +26,7 @@ type AuthHandler struct {
 	JWTSecret string
 	JWTHours  int
 	Email     *email.Sender
+	FrontendBaseURL string
 }
 
 func (h *AuthHandler) Register(c *gin.Context) {
@@ -65,7 +66,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	verifyToken, verifyHash, err := generateVerificationToken()
+	verifyToken, verifyHash, err := generateToken()
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "failed to create verification token", err.Error())
 		return
@@ -208,7 +209,7 @@ func (h *AuthHandler) VerifyEmail(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "verification token is required", nil)
 		return
 	}
-	hash := hashVerificationToken(token)
+	hash := hashToken(token)
 
 	var user models.User
 	if err := h.DB.Where("email_verify_token_hash = ?", hash).First(&user).Error; err != nil {
@@ -250,19 +251,168 @@ func (h *AuthHandler) VerifyEmail(c *gin.Context) {
 	respondSuccess(c, http.StatusOK, gin.H{"message": "email verified"}, nil)
 }
 
-func generateVerificationToken() (string, string, error) {
+func (h *AuthHandler) ForgotPassword(c *gin.Context) {
+	var in struct {
+		Email string `json:"email" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		respondError(c, http.StatusBadRequest, "invalid request body", err.Error())
+		return
+	}
+	in.Email = strings.ToLower(strings.TrimSpace(in.Email))
+	if in.Email == "" {
+		respondError(c, http.StatusBadRequest, "email is required", nil)
+		return
+	}
+	if _, err := mail.ParseAddress(in.Email); err != nil {
+		respondError(c, http.StatusBadRequest, "invalid email address", nil)
+		return
+	}
+
+	var user models.User
+	if err := h.DB.Where("email = ?", in.Email).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondSuccess(c, http.StatusOK, gin.H{"message": "if the email exists, a reset link has been sent"}, nil)
+			return
+		}
+		respondError(c, http.StatusInternalServerError, "failed to fetch user", err.Error())
+		return
+	}
+
+	if h.Email == nil {
+		respondError(c, http.StatusServiceUnavailable, "email service unavailable", nil)
+		return
+	}
+
+	resetToken, resetHash, err := generateToken()
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "failed to create reset token", err.Error())
+		return
+	}
+	now := time.Now()
+	expiry := now.Add(time.Hour)
+	if err := h.DB.Model(&user).Updates(map[string]interface{}{
+		"password_reset_token_hash": resetHash,
+		"password_reset_sent_at":    &now,
+		"password_reset_expires_at": &expiry,
+	}).Error; err != nil {
+		respondError(c, http.StatusInternalServerError, "failed to save reset token", err.Error())
+		return
+	}
+
+	resetURL := fmt.Sprintf("%s/login?mode=reset&token=%s", frontendBaseURL(c, h.FrontendBaseURL), resetToken)
+	name := user.Name
+	if strings.TrimSpace(name) == "" {
+		name = "there"
+	}
+	html, err := email.ParseTemplate("reset_password.html", map[string]any{
+		"Name":        name,
+		"ResetURL":    resetURL,
+		"ExpiryHours": 1,
+	})
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "failed to build reset email", err.Error())
+		return
+	}
+	if err := h.Email.Send(user.Email, "Reset your password", html); err != nil {
+		respondError(c, http.StatusInternalServerError, "failed to send reset email", err.Error())
+		return
+	}
+
+	respondSuccess(c, http.StatusOK, gin.H{"message": "if the email exists, a reset link has been sent"}, nil)
+}
+
+func (h *AuthHandler) ResetPassword(c *gin.Context) {
+	var in struct {
+		Token           string `json:"token" binding:"required"`
+		Password        string `json:"password" binding:"required"`
+		ConfirmPassword string `json:"confirmPassword"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		respondError(c, http.StatusBadRequest, "invalid request body", err.Error())
+		return
+	}
+	in.Token = strings.TrimSpace(in.Token)
+	in.Password = strings.TrimSpace(in.Password)
+	in.ConfirmPassword = strings.TrimSpace(in.ConfirmPassword)
+
+	if in.Token == "" {
+		respondError(c, http.StatusBadRequest, "reset token is required", nil)
+		return
+	}
+	if len(in.Password) < 8 {
+		respondError(c, http.StatusBadRequest, "password must be at least 8 characters", nil)
+		return
+	}
+	if in.ConfirmPassword != "" && in.Password != in.ConfirmPassword {
+		respondError(c, http.StatusBadRequest, "passwords do not match", nil)
+		return
+	}
+
+	hash := hashToken(in.Token)
+	var user models.User
+	if err := h.DB.Where("password_reset_token_hash = ?", hash).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondError(c, http.StatusNotFound, "invalid or expired reset token", nil)
+			return
+		}
+		respondError(c, http.StatusInternalServerError, "failed to fetch user", err.Error())
+		return
+	}
+
+	if user.PasswordResetExpiresAt == nil || time.Now().After(*user.PasswordResetExpiresAt) {
+		_ = h.DB.Model(&user).Updates(map[string]interface{}{
+			"password_reset_token_hash": "",
+			"password_reset_sent_at":    nil,
+			"password_reset_expires_at": nil,
+		}).Error
+		respondError(c, http.StatusUnauthorized, "reset token expired", nil)
+		return
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(in.Password), 12)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "failed to hash password", err.Error())
+		return
+	}
+
+	if err := h.DB.Model(&user).Updates(map[string]interface{}{
+		"password":                  string(passwordHash),
+		"password_reset_token_hash": "",
+		"password_reset_sent_at":    nil,
+		"password_reset_expires_at": nil,
+	}).Error; err != nil {
+		respondError(c, http.StatusInternalServerError, "failed to reset password", err.Error())
+		return
+	}
+
+	respondSuccess(c, http.StatusOK, gin.H{"message": "password reset successful"}, nil)
+}
+
+func generateToken() (string, string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", "", err
 	}
 	token := base64.RawURLEncoding.EncodeToString(b)
-	hash := hashVerificationToken(token)
+	hash := hashToken(token)
 	return token, hash, nil
 }
 
-func hashVerificationToken(token string) string {
+func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+func frontendBaseURL(c *gin.Context, configured string) string {
+	if strings.TrimSpace(configured) != "" {
+		return strings.TrimRight(strings.TrimSpace(configured), "/")
+	}
+	origin := strings.TrimSpace(c.GetHeader("Origin"))
+	if origin != "" {
+		return strings.TrimRight(origin, "/")
+	}
+	return requestBaseURL(c)
 }
 
 func requestBaseURL(c *gin.Context) string {

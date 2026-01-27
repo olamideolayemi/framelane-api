@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -12,6 +13,7 @@ type Config struct {
 	DatabaseURL string
 	JWTSecret   string
 	JWTExpiresH int
+	FrontendBaseURL string
 
 	S3Endpoint  string
 	S3UseSSL    bool
@@ -49,6 +51,7 @@ func Load() *Config {
 		DatabaseURL: os.Getenv("DATABASE_URL"),
 		JWTSecret:   os.Getenv("JWT_SECRET"),
 		JWTExpiresH: toInt("JWT_EXPIRES_HOURS", 720),
+		FrontendBaseURL: strings.TrimRight(os.Getenv("FRONTEND_BASE_URL"), "/"),
 
 		S3Endpoint:  os.Getenv("S3_ENDPOINT"),
 		S3UseSSL:    toBool("S3_USE_SSL", false),
