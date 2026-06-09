@@ -1,0 +1,38 @@
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# Local secrets (never bake into images)
+.env
+.env.*
+!.env.example
+
+# Local builds
+framelane-api
+main
+*.exe
+
+# Runtime artifacts that don't belong in the image
+uploads/
+tmp/
+logs/
+*.log
+
+# Docs & meta
+*.md
+LICENSE
+docs/
+
+# Dev tooling
+Dockerfile
+.dockerignore
+docker-compose.yml
+.vscode/
+.idea/
+.DS_Store
+
+# Test cache
+*.test
+*.out
+coverage.*

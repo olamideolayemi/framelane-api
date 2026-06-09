@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/didip/tollbooth/v7"
@@ -67,10 +68,21 @@ func main() {
 	hub := ws.NewHub()
 	go hub.Run()
 
+	// CORS allow-list is configured via CORS_ALLOWED_ORIGINS (comma-separated).
+	// Defaults to localhost for development.
+	originsRaw := os.Getenv("CORS_ALLOWED_ORIGINS")
+	if strings.TrimSpace(originsRaw) == "" {
+		originsRaw = "http://localhost:3000"
+	}
+	origins := strings.Split(originsRaw, ",")
+	for i, o := range origins {
+		origins[i] = strings.TrimSpace(o)
+	}
+
 	// Create one router instance
 	r := gin.New()
 	r.Use(gin.Recovery(), cors.New(cors.Config{
-		AllowOrigins:     []string{"http://framelane-framer-app-v1.2.vercel.app", "http://localhost:3000"},
+		AllowOrigins:     origins,
 		AllowMethods:     []string{"GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Authorization", "Content-Type"},
 		ExposeHeaders:    []string{"Content-Length"},
