@@ -15,7 +15,17 @@ func Connect(dsn string) *gorm.DB {
 	if err := db.Exec(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`).Error; err != nil {
 		log.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Order{}, &models.Frame{}, &models.FrameSize{}); err != nil {
+	if err := db.AutoMigrate(
+		&models.User{},
+		&models.Frame{}, &models.FrameSize{},
+		&models.Glass{}, &models.Lamination{}, &models.FrameFinish{},
+		&models.Address{},
+		&models.CartItem{},
+		&models.PromoCode{},
+		&models.Order{}, &models.OrderItem{}, &models.OrderEvent{},
+		&models.Review{},
+		&models.Referral{},
+	); err != nil {
 		log.Fatal(err)
 	}
 	// Mark legacy users (created before email verification) as verified.

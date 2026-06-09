@@ -22,9 +22,19 @@ type Hub struct {
 func NewHub() *Hub {
 	return &Hub{
 		clients:    make(map[*Client]bool),
-		broadcast:  make(chan []byte),
+		broadcast:  make(chan []byte, 64),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
+	}
+}
+
+// Broadcast pushes a message to all connected clients. Non-blocking: drops
+// the message if the hub's buffer is full so callers from request handlers
+// never stall.
+func (h *Hub) Broadcast(msg []byte) {
+	select {
+	case h.broadcast <- msg:
+	default:
 	}
 }
 

@@ -23,6 +23,15 @@ type User struct {
 	PasswordResetTokenHash string   `gorm:"size:128;index"`
 	PasswordResetSentAt    *time.Time
 	PasswordResetExpiresAt *time.Time
+
+	// Growth / referrals
+	ReferralCode   string `gorm:"size:40;uniqueIndex" json:"referralCode"`
+	WalletBalance  int    `gorm:"default:0" json:"walletBalance"` // NGN credits applicable to future orders
+
+	// Notification prefs
+	WhatsAppOptIn   bool   `gorm:"default:false" json:"whatsappOptIn"`
+	NotifyChannel   string `gorm:"size:20;default:'email'" json:"notifyChannel"` // email | whatsapp | both
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

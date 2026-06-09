@@ -16,9 +16,11 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/olamideolayemi/framelane-api/internal/auth"
 	"github.com/olamideolayemi/framelane-api/internal/email"
 	"github.com/olamideolayemi/framelane-api/internal/models"
+	"github.com/olamideolayemi/framelane-api/internal/seed"
 )
 
 type AuthHandler struct {
@@ -31,11 +33,12 @@ type AuthHandler struct {
 
 func (h *AuthHandler) Register(c *gin.Context) {
 	var in struct {
-		Email    string `json:"email" binding:"required"`
-		Password string `json:"password" binding:"required"`
-		Name     string `json:"name"`
-		Phone    string `json:"phone"`
-		Address  string `json:"address"`
+		Email        string `json:"email" binding:"required"`
+		Password     string `json:"password" binding:"required"`
+		Name         string `json:"name"`
+		Phone        string `json:"phone"`
+		Address      string `json:"address"`
+		ReferralCode string `json:"referralCode"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		respondError(c, http.StatusBadRequest, "invalid request body", err.Error())
@@ -73,6 +76,12 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	}
 	now := time.Now()
 
+	myRefCode, err := seed.GenerateReferralCode()
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "failed to generate referral code", err.Error())
+		return
+	}
+
 	u := models.User{
 		Name:                in.Name,
 		Email:               in.Email,
@@ -82,6 +91,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		EmailVerified:       false,
 		EmailVerifyTokenHash: verifyHash,
 		EmailVerifySentAt:   &now,
+		ReferralCode:        myRefCode,
 	}
 
 	if err := h.DB.Create(&u).Error; err != nil {
@@ -91,6 +101,24 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		}
 		respondError(c, http.StatusInternalServerError, "failed to create user", err.Error())
 		return
+	}
+
+	// Optional referral linkage. We do NOT credit the referrer here — the
+	// reward fires when this user records their first paid order (see
+	// creditReferralIfFirstPaid in payment.go).
+	if code := strings.ToUpper(strings.TrimSpace(in.ReferralCode)); code != "" {
+		var referrer models.User
+		if err := h.DB.Select("id").Where("referral_code = ?", code).First(&referrer).Error; err == nil && referrer.ID != u.ID {
+			rewardAmount := 1000 // ₦1,000 — TODO: move to app_settings
+			_ = h.DB.Create(&models.Referral{
+				ID:             uuid.New(),
+				ReferrerUserID: referrer.ID,
+				ReferredUserID: u.ID,
+				Code:           code,
+				RewardAmount:   rewardAmount,
+				Status:         models.ReferralStatusPending,
+			}).Error
+		}
 	}
 
 	if h.Email == nil {

@@ -15,6 +15,7 @@ import (
 	"github.com/olamideolayemi/framelane-api/internal/db"
 	"github.com/olamideolayemi/framelane-api/internal/email"
 	"github.com/olamideolayemi/framelane-api/internal/models"
+	"github.com/olamideolayemi/framelane-api/internal/payments"
 	"github.com/olamideolayemi/framelane-api/internal/routes"
 	"github.com/olamideolayemi/framelane-api/internal/seed"
 	"github.com/olamideolayemi/framelane-api/internal/storage"
@@ -30,9 +31,22 @@ func main() {
 		log.Fatal("Failed to migrate FrameSize table:", err)
 	}
 
+	// Backfill referral codes BEFORE the uniqueIndex on referral_code is enforced
+	// (db.Connect runs AutoMigrate; here we just ensure no collisions for users
+	// that existed before this column was added).
+	if err := seed.BackfillReferralCodes(d); err != nil {
+		log.Fatal("failed to backfill referral codes:", err)
+	}
+
 	// Seed frame sizes after DB connection
 	if err := seed.SeedFrameSizes(d); err != nil {
 		log.Fatal("failed to seed frame sizes:", err)
+	}
+	if err := seed.SeedGlasses(d); err != nil {
+		log.Fatal("failed to seed glasses:", err)
+	}
+	if err := seed.SeedLaminations(d); err != nil {
+		log.Fatal("failed to seed laminations:", err)
 	}
 	if err := seed.EnsureAdminUser(d); err != nil {
 		log.Fatal("failed to ensure admin user:", err)
@@ -45,6 +59,13 @@ func main() {
 	}
 
 	mailer := email.New(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.FromEmail)
+
+	// Paystack client (lazy: handler will fall back to env-built one if nil)
+	paystackClient := payments.NewPaystack(os.Getenv("PAYSTACK_SECRET"))
+
+	// WebSocket hub for live admin updates
+	hub := ws.NewHub()
+	go hub.Run()
 
 	// Create one router instance
 	r := gin.New()
@@ -65,10 +86,8 @@ func main() {
 	routes.Setup(r, routes.Deps{
 		DB: d, JWTSecret: cfg.JWTSecret, JWTHours: cfg.JWTExpiresH,
 		S3: s3, Email: mailer, FrontendBaseURL: cfg.FrontendBaseURL,
+		Hub: hub, Paystack: paystackClient,
 	})
-
-	hub := ws.NewHub()
-	go hub.Run()
 
 	r.GET("/ws", func(c *gin.Context) {
 		ws.ServeWS(hub, c.Writer, c.Request)
