@@ -43,6 +43,9 @@ func main() {
 	if err := seed.SeedFrameSizes(d); err != nil {
 		log.Fatal("failed to seed frame sizes:", err)
 	}
+	if err := seed.SeedFrames(d); err != nil {
+		log.Fatal("failed to seed frames:", err)
+	}
 	if err := seed.SeedGlasses(d); err != nil {
 		log.Fatal("failed to seed glasses:", err)
 	}
